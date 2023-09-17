@@ -9,40 +9,57 @@ from utils import *
 import torch.multiprocessing
 torch.multiprocessing.set_sharing_strategy('file_system')
 
-
-#CUDA_VISIBLE_DEVICES=0 python train.py --model=ConvMixer --image_mode=color --image_size=96
 class Inference():
+    """用于执行模型推理过程的方法
+    """
     def __init__(self, config):
-        ## net ---------------------------------------
-        #net = get_model(model_name=config.model, num_class=2, is_first_bn=True)
+        """模型网络初始化
+
+        Args:
+            config (argparse): 配置参数
+        """
         self.config = config
         self.net = get_model(model_name=self.config.model, num_class=2, image_size=self.config.image_size, patch_size=self.config.patch_size)
         self.net = torch.nn.DataParallel(self.net)
         self.net =  self.net.cuda()
-        total_params = sum(p.numel() for p in self.net.parameters())
-        total_params += sum(p.numel() for p in self.net.buffers())
-        print(f'{total_params:,} total parameters.')
+        self.modelloaded = False
     
-    def load_checkpoint(self,pretrained_model):
-        self.config.save_dir = './Models'
-        model_name = self.config.model + '_' + self.config.image_mode + '_' + str(self.config.image_size)+"_16_multjobs_new0.1"
-        self.config.save_dir = os.path.join(self.config.save_dir, model_name)
-        initial_checkpoint = pretrained_model
-        if initial_checkpoint is not None:
-            
-            initial_checkpoint = os.path.join(self.config.save_dir +'/checkpoint',initial_checkpoint)
-            print('\tinitial_checkpoint = %s\n' % initial_checkpoint)
-            # print(net.state_dict())
-            try:
-                self.net.load_state_dict(torch.load(initial_checkpoint, map_location=lambda storage, loc: storage))
-            except:
-                print("未发现权重文件")
+    def load_checkpoint(self,checkpoint_name):
+        """加载检查点参数
 
-    def run_test(self,input_dir,output_dir):
-        self.save_dir = os.path.join(self.config.save_dir + '/checkpoint', output_dir)
+        Args:
+            checkpoint_name : 需要加载的检查点名称
+        """
+        self.config.save_dir = './Models'
+        self.config.save_dir = os.path.join(self.config.save_dir, checkpoint_name)
+        initial_checkpoint = os.path.join(self.config.save_dir +'/checkpoint',r'global_min_acer_model.pth')
+        print('\tinitial_checkpoint = %s\n' % initial_checkpoint)
+        # print(net.state_dict())
+        try:
+            self.net.load_state_dict(torch.load(initial_checkpoint, map_location=lambda storage, loc: storage))
+            self.modelloaded = True
+        except:
+            print("未发现权重文件")
+            self.modelloaded = False
+
+    def run(self,input_dir,output_dir):
+        """运行伪造预测程序
+        该函数可自动遍历输入路径中的所以图片格式文件,并将预测结果保存至输出路径的“out.txt”文件中
+
+        Args:
+            input_dir: 输入数据路径
+            output_dir: 图片保存路径
+        """
+        if self.modelloaded == False :
+            print("请先加载模型参数文件")
+            return
+        self.outputpath = os.path.join(output_dir,"out.txt")#文件输出路径
         augment = get_augment(self.config.image_mode)
         inf_dataset = FDDataset(mode = 'test', modality=self.config.image_mode,image_size=self.config.image_size,
                                 fold_index=self.config.train_fold_index,augment=augment,dataroot=input_dir)
+        if len(inf_dataset) == 0:
+            print("未找到图片文件")
+            return
         inf_loader  = DataLoader( inf_dataset,
                                     shuffle=False,
                                     batch_size  = self.config.batch_size,
@@ -50,11 +67,10 @@ class Inference():
                                     num_workers = self.config.num_workers)
         self.net.eval()
         print('infer!!!!!!!!!')
-        valid_num  = 0
-        probs0 = []
-        probs1 = []
-        probs2 = []
-        probs3 = []
+        probs0 = []#存储真伪预测结果
+        probs1 = []#存储打印预测结果
+        probs2 = []#存储翻拍预测结果
+        probs3 = []#存储贴照片预测结果
 
         for i, (input, truth) in enumerate(tqdm(inf_loader)):
             b,n,c,w,h = input.size()
@@ -80,8 +96,6 @@ class Inference():
                 prob2 = F.softmax(logit_2, 1)
                 prob3 = F.softmax(logit_3, 1)
 
-
-            valid_num += len(input)
             probs0.append(prob0.data.cpu().numpy())
             probs1.append(prob1.data.cpu().numpy())
             probs2.append(prob2.data.cpu().numpy())
@@ -93,15 +107,28 @@ class Inference():
         probs3 = np.concatenate(probs3)
         out =  [probs0[:, 1],probs1[:, 1],probs2[:, 1],probs3[:, 1]]
         print('done')
-        submission(out,None,self.save_dir+'_noTTA_out.txt', mode='test')
+        submission(out,None,self.outputpath, mode='test')
 
 def main(config):
-    #初始化模型
+    """推理阶段主函数
+    具有模型初始化、模型参数加载、运行检测等功能
+
+    Args:
+        config (argparse) : 配置参数
+    """
+    # 初始化模型
     net = Inference(config)
-    #加载模型参数
-    net.load_checkpoint(config.pretrained_model)
-    #run
-    net.run_test( None, 'global_test_36_TTA_out')
+    while True : #等待命令行输入 
+        msg = input()
+        #退出程序
+        if msg == "exit":
+            exit()
+        # 加载模型参数
+        elif len(msg.split(" "))==2 and msg.split(" ")[0]=="loadcheckpoint":
+            net.load_checkpoint(msg.split(" ")[1])
+        # 运行检测
+        elif len(msg.split(" "))==2 and msg.split(" ")[0]=="datapath":
+            net.run( msg.split(" ")[1], 'global_test_36_TTA_out')
 
 if __name__ == '__main__':
     os.environ['CUDA_VISIBLE_DEVICES']='0'
