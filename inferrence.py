@@ -71,7 +71,8 @@ class Inference():
         probs1 = []#存储打印预测结果
         probs2 = []#存储翻拍预测结果
         probs3 = []#存储贴照片预测结果
-
+        
+        #加载数据并进行端到端推理
         for i, (input, truth) in enumerate(tqdm(inf_loader)):
             b,n,c,w,h = input.size()
             input = input.view(b*n,c,w,h)
